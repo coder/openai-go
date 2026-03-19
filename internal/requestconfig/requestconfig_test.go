@@ -1,6 +1,7 @@
 package requestconfig_test
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"strings"
@@ -40,6 +41,44 @@ func makeJSONPayload(size int) []byte {
 
 func makeTextPayload(size int) string {
 	return strings.Repeat("a", size)
+}
+
+func TestWithJSONSetPreservedAfterBodySerialization(t *testing.T) {
+	// Regression test: WithJSONSet (used by NewStreaming to inject
+	// "stream": true) must survive deferred body serialization.
+	// Previously, Apply ran WithJSONSet before the body was serialized,
+	// so serialization overwrote cfg.Body and dropped the "stream" key.
+	body := responses.ResponseNewParams{
+		Model: shared.ResponsesModel("gpt-4o-mini"),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: param.NewOpt("hello"),
+		},
+	}
+
+	cfg, err := requestconfig.NewRequestConfig(
+		context.Background(),
+		http.MethodPost,
+		"https://example.com",
+		body,
+		nil,
+		option.WithJSONSet("stream", true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf, ok := cfg.Body.(*bytes.Buffer)
+	if !ok || buf == nil {
+		t.Fatal("expected cfg.Body to be a *bytes.Buffer")
+	}
+
+	raw := buf.String()
+	if !strings.Contains(raw, `"stream":true`) {
+		t.Fatalf("expected body to contain \"stream\":true, got: %s", raw)
+	}
+	if !strings.Contains(raw, `"model":"gpt-4o-mini"`) {
+		t.Fatalf("expected body to contain model param, got: %s", raw)
+	}
 }
 
 func BenchmarkNewRequestConfig(b *testing.B) {

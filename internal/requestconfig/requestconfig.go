@@ -23,6 +23,7 @@ import (
 	"github.com/openai/openai-go/v3/internal/apiform"
 	"github.com/openai/openai-go/v3/internal/apiquery"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func getDefaultHeaders() map[string]string {
@@ -129,6 +130,18 @@ func NewRequestConfig(ctx context.Context, method string, u string, body any, ds
 		return nil, err
 	}
 
+	// Options like WithJSONSet may have written to cfg.Body during Apply
+	// (e.g. setting "stream": true). If we're about to serialize the real
+	// body params below, save these modifications so we can merge them
+	// back afterward — otherwise the serialization overwrites them.
+	var jsonOverlay []byte
+	if cfg.ShouldSerializeBody {
+		if buf, ok := cfg.Body.(*bytes.Buffer); ok && buf != nil && buf.Len() > 0 {
+			jsonOverlay = bytes.Clone(buf.Bytes())
+			cfg.Body = nil
+		}
+	}
+
 	var reader io.Reader
 
 	contentType := "application/json"
@@ -173,6 +186,20 @@ func NewRequestConfig(ctx context.Context, method string, u string, body any, ds
 				return nil, err
 			}
 			reader = buf
+		}
+
+		// Merge back any JSON keys that were set via WithJSONSet during
+		// Apply (e.g. "stream": true from NewStreaming). These were saved
+		// in jsonOverlay before body serialization to avoid being clobbered.
+		if len(jsonOverlay) > 0 {
+			if buf, ok := reader.(*bytes.Buffer); ok && buf != nil {
+				merged := buf.Bytes()
+				gjson.ParseBytes(jsonOverlay).ForEach(func(key, value gjson.Result) bool {
+					merged, _ = sjson.SetRawBytes(merged, key.String(), []byte(value.Raw))
+					return true
+				})
+				reader = bytes.NewBuffer(merged)
+			}
 		}
 
 		cfg.Body = reader
