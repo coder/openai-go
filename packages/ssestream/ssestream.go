@@ -75,12 +75,18 @@ func (s *eventStreamDecoder) Next() bool {
 
 	event := ""
 	data := bytes.NewBuffer(nil)
+	hasData := false
 
 	for s.scn.Scan() {
 		txt := s.scn.Bytes()
 
-		// Dispatch event on an empty line
+		// Dispatch event on an empty line if data was collected.
 		if len(txt) == 0 {
+			if !hasData {
+				event = ""
+				data.Reset()
+				continue
+			}
 			s.evt = Event{
 				Type: event,
 				Data: data.Bytes(),
@@ -103,6 +109,7 @@ func (s *eventStreamDecoder) Next() bool {
 		case "event":
 			event = string(value)
 		case "data":
+			hasData = true
 			_, s.err = data.Write(value)
 			if s.err != nil {
 				break
